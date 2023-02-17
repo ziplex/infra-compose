@@ -1,2 +1,3 @@
-# infra-compose
-Full development infrastructure
+# INFRA
+
+Composer for development infrastructure

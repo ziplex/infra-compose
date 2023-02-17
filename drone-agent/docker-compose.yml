@@ -1,0 +1,23 @@
+version: '3'
+
+services:
+ drone-runner:
+    image: drone/drone-runner-docker:1.6.3
+    container_name: drone-runner-prod
+    restart: always
+    #    extra_hosts:
+    #  - "drone.fraudscore.mobi:95.217.208.217"
+    #depends_on:
+    #  - drone-server
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - DRONE_RPC_HOST=drone.your-site.com
+      - DRONE_RPC_SECRET=your_secret_here
+      - DRONE_RPC_PROTO=https
+      - GIT_SSL_NO_VERIFY=true
+      - DRONE_SECRET_PLUGIN_ENDPOINT=https://drone-vault.your-site.com
+      - DRONE_SECRET_PLUGIN_TOKEN=your_token_here
+      - DRONE_LOGS_TRACE=true
+      - DRONE_RUNNER_CAPACITY=10
+

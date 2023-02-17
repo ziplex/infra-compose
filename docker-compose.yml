@@ -1,0 +1,323 @@
+version: "3.2"
+
+services:
+  samba-ad:
+    container_name: pdc
+    hostname: pdc
+    image: your-site/samba-ad:20.04
+    build:
+      context: ./build/samba
+      dockerfile: Dockerfile
+    dns:
+        - 8.8.8.8
+        - 1.1.1.1
+
+    dns_search: your-site.loc
+    # extra_hosts:
+    #     - "pdc.your-site.loc:172.25.10.1"
+    networks:
+      - backend
+    # ports:
+    #   - 172.25.10.1:53:53
+    #   - 172.25.10.1:53:53/udp
+    #   - 172.25.10.1:88:88
+    #   - 172.25.10.1:88:88/udp
+    #   - 172.25.10.1:135:135
+    #   - 172.25.10.1:137-138:137-138/udp
+    #   - 172.25.10.1:139:139
+    #   - 172.25.10.1:389:389
+    #   - 172.25.10.1:389:389/udp
+    #   - 172.25.10.1:445:445
+    #   - 172.25.10.1:464:464
+    #   - 172.25.10.1:464:464/udp
+    #   - 172.25.10.1:636:636
+    #   - 172.25.10.1:49152:49152
+    #   - 172.25.10.1:1024-1044:1024-1044
+    #   - 172.25.10.1:3268-3269:3268-3269
+    #network_mode: host
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ./volumes/samba/data:/var/lib/samba
+      - ./volumes/samba/config:/etc/samba/external
+      - ./volumes/samba/share:/share
+      #- ./volumes/samba/nsswitch.conf:/etc/nsswitch.conf
+      # - ./samba/resolv.conf:/etc/resolv.conf:ro
+    environment:
+     - DOMAIN=your-site.loc
+     - DOMAINPASS=your_password_here
+     - DNSFORWARDER=8.8.8.8
+    # - HOSTIP=172.25.10.1
+    # - JOIN=false
+    # - JOINSITE=""
+    # - MULTISITE=false
+    # - NOCOMPLEXITY=false
+     - INSECURELDAP=true
+    # devices:
+    #   - /dev/net/tun
+    # uncoment priveleged for first run only
+    # privileged: true
+    restart: always
+
+
+  nginx-proxy:
+    image: jwilder/nginx-proxy
+    container_name: nginx-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+      - ./nginx/vhosts:/etc/nginx/vhost.d
+      - ./nginx/html:/usr/share/nginx/html
+      - ./conf/client_max_body_size.conf:/etc/nginx/conf.d/client_max_body_size.conf:ro
+    restart: always
+    networks:
+     - frontend
+     - backend
+
+  letsencrypt:
+    image: nginxproxy/acme-companion:2.2
+    environment:
+    ### ToDo: Change to your e-mail address
+      - DEFAULT_EMAIL=ziplex@yandex.ru
+      - NGINX_PROXY_CONTAINER=nginx-proxy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./nginx/certs:/etc/nginx/certs:rw
+      - ./nginx/vhosts:/etc/nginx/vhost.d
+      - ./nginx/html:/usr/share/nginx/html
+    restart: always
+    networks:
+     - frontend
+
+  gitea:
+    image: gitea/gitea:1.17
+    container_name: gitea-app-prod
+    environment:
+      - GITEA_CUSTOM=/data/gitea/custom
+      - RUN_MODE=prod
+      - USER_UID=1000
+      - USER_GID=1000
+      - DB_TYPE=mysql
+      - DB_HOST=db:3306
+      - DB_NAME=gitea
+      - DB_USER=gitea
+      - DB_PASSWD=db_password_here
+      - VIRTUAL_PORT=3000
+      - VIRTUAL_HOST=git.your-site.com
+      - LETSENCRYPT_HOST=git.your-site.com
+      #- HTTPS_METHOD=nohttp
+      - SSH_PORT=22
+      - SSH_DOMAIN=gitea.your-site.com
+    volumes:
+      - ./backups:/backups
+      - ./tools:/tools
+      - ./volumes/giteadata:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+    #  - "3000:3000"
+      - "22:22"
+    networks:
+      - frontend
+      - backend
+  db:
+    image: mariadb:10.4
+    container_name: db
+    environment:
+      MYSQL_ROOT_PASSWORD: db_mysql_password_here
+      MYSQL_DATABASE: gitea
+      MYSQL_USER: gitea
+      MYSQL_PASSWORD: db_password_here
+    volumes:
+      - ./backups:/backups
+      - ./volumes/giteadb:/var/lib/mysql
+    networks:
+      - backend
+
+  adminer:
+    image: adminer:latest
+    container_name: adminer
+    restart: always
+    environment:
+      - VIRTUAL_HOST=pma-infra.your-site.com
+      - LETSENCRYPT_HOST=pma-infra.your-site.com
+      - VIRTUAL_PORT=8080
+#      - VIRTUAL_PROTO=https
+    networks:
+      - frontend
+      - backend
+#    ports:
+#      - 7777:8080
+
+  drone-server:
+        image: drone/drone:2.12.1
+        container_name: drone-server-prod
+        #ports:
+        # - "8081:80"
+        #  - 9000
+        volumes:
+          - ./volumes/drone:/var/lib/drone/
+        restart: always
+        depends_on:
+          - gitea
+        environment:
+          - DRONE_OPEN=true
+          - DRONE_SERVER_PROTO=https
+          - DRONE_SERVER_HOST=drone.your-site.com
+          - DRONE_GITEA_CLIENT_ID=your_gitea_id
+          - DRONE_GITEA_CLIENT_SECRET=your_gitea_client_secret
+          - DRONE_RPC_SECRET=your_secret_here
+          - DRONE_GITEA=true
+          - DRONE_GITEA_SERVER=https://git.your-site.com
+          - DRONE_USER_CREATE=username:ziplex,admin:true
+          - DRONE_NETWORK=frontend
+          - DRONE_DATABASE_DRIVER=mysql
+          - DRONE_DATABASE_DATASOURCE=root:db_mysql_password_here@tcp(db:3306)/drone?parseTime=true
+          - DRONE_LOGS_DEBUG=true
+          - VIRTUAL_HOST=drone.your-site.com
+          - LETSENCRYPT_HOST=drone.your-site.com
+          - VIRTUAL_PORT=80
+          - DRONE_GIT_ALWAYS_AUTH=true
+          - DRONE_LOGS_TRACE=true
+          - DRONE_CRON_INTERVAL=5m
+            #- DRONE_GITEA_SKIP_VERIFY=false
+        networks:
+          - frontend
+          - backend
+
+  drone-vault:
+        image: drone/vault
+        container_name: drone-vault
+#        ports:
+#          - 3000:3000
+        restart: always
+        environment:
+          - DRONE_DEBUG=true
+          - DRONE_SECRET=your_token_here
+          - VAULT_ADDR=http://vault:8200
+          - VAULT_AUTH_TYPE=approle
+          - VAULT_TOKEN_TTL=72h
+          - VAULT_TOKEN_RENEWAL=24h
+          - VAULT_APPROLE_ID=your_vault_approle_id
+          - VAULT_APPROLE_SECRET=your_vault_approle_secret
+          - VIRTUAL_HOST=drone-vault.your-site.com
+          - LETSENCRYPT_HOST=drone-vault.your-site.com
+          - VIRTUAL_PORT=3000
+        networks:
+          - frontend
+          - backend
+
+#  consul:
+#    image: consul:1.8
+#    # ports:
+#    #   - 8500:8500
+#    command: agent -server -bind 0.0.0.0 -client 0.0.0.0 -bootstrap-expect 1 -config-file=/consul/config/config.json
+#    environment:
+#      - VIRTUAL_HOST=consul.your-site.com
+#      - VIRTUAL_PORT=8500
+#    volumes:
+#      - ./conf/consul-config.json:/consul/config/config.json
+#      - ./volumes/consul/data:/consul/data
+#    networks:
+#      - frontend
+#
+
+  vault:
+    image: vault
+    container_name: vault
+    #ports:
+    #  - "8200:8200"
+    restart: always
+    volumes:
+      - ./volumes/vault/logs:/vault/logs
+      - ./volumes/vault/file:/vault/file
+      - ./conf/vault.json:/vault/config/vault.json
+    cap_add:
+      - IPC_LOCK
+    entrypoint: vault server -config=/vault/config/vault.json
+    environment:
+      - VIRTUAL_HOST=vault.your-site.com
+      - LETSENCRYPT_HOST=vault.your-site.com
+      - VIRTUAL_PORT=8200
+    networks:
+      - frontend
+
+  redis:
+    image: redis:6.0.10-alpine3.13
+    networks:
+      - backend
+
+
+  teleport:
+    image: quay.io/gravitational/teleport:9.0.1
+    container_name: teleport
+    hostname: teledocker.your-site.com
+    environment:
+      - VIRTUAL_HOST=teleport.your-site.com
+      - LETSENCRYPT_HOST=teleport.your-site.com
+      - VIRTUAL_PORT=3080
+      - VIRTUAL_PROTO=https
+    ports:
+      - "3022:3022"
+      - "3023:3023"
+      - "3024:3024"
+      - "3025:3025"
+#      - "3026:3026"
+      - "3027:3027"
+      - "3028:3028"
+      - "3036:3036"
+#      - "8443:3080"
+    restart: always
+    networks:
+      - backend
+    volumes:
+      - ./volumes/teleport:/etc/teleport
+      - ./volumes/teleport/data:/var/lib/teleport
+
+  nexus:
+    image: sonatype/nexus3
+    container_name: nexus
+    restart: always
+    environment:
+      - VIRTUAL_HOST=registry.your-site.com
+      - LETSENCRYPT_HOST=registry.your-site.com
+      - VIRTUAL_PORT=8081
+#      - VIRTUAL_PROTO=https
+    networks:
+      - backend
+      - frontend
+    volumes:
+      - ./volumes/nexus-data:/nexus-data
+#    ports:
+#      - "8081:8081"
+
+  nexus-registry-port-forward:
+    image: your-site/port-forward
+    build:
+      context: .
+      dockerfile: Dockerfile.socat
+    networks:
+      - backend
+      - frontend
+    environment:
+      - LOCAL_PORT=80
+      - REMOTE_HOST=nexus
+      - REMOTE_PORT=8083
+      - VIRTUAL_HOST=dr.your-site.com
+      - LETSENCRYPT_HOST=dr.your-site.com
+      - VIRTUAL_PORT=80
+#      - VIRTUAL_PROTO=https
+
+networks:
+  frontend:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.25.10.0/24
+  backend:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.25.9.0/24
